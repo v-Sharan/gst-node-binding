@@ -2,7 +2,7 @@
   "name": "gst-node-bindings",
   "version": "1.0.0",
   "description": "Node.js bindings for GStreamer",
-  "main": "dist/bundle.js",
+  "main": "index.js",
   "scripts": {
     "install": "node-gyp rebuild",
     "build": "webpack --mode production",
