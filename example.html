@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>GStreamer RTSP Stream</title>
+    <style>
+      .video-container {
+        width: 640px;
+        height: 480px;
+        border: 1px solid #ccc;
+        margin: 20px;
+      }
+      #videoStream {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="video-container">
+      <img id="videoStream" alt="RTSP Stream" />
+    </div>
+
+    <script>
+      // Import the GStreamerPipeline class
+      const GStreamerPipeline = require("./index");
+
+      // Create a new pipeline instance
+      const pipeline = new GStreamerPipeline();
+
+      // Set up RTSP pipeline
+      const pipelineString = `rtspsrc location=rtsp://192.168.0.215:554/main latency=0 ! 
+            queue ! 
+            rtph264depay ! 
+            h264parse ! 
+            avdec_h264 ! 
+            videoconvert ! 
+            video/x-raw,format=RGB ! 
+            appsink name=sink emit-signals=true sync=false max-buffers=1 drop=true`;
+
+      // Get the video element
+      const videoElement = document.getElementById("videoStream");
+
+      // Set up frame callback
+      pipeline.onFrame((dataUrl) => {
+        // Update the image source with the new frame
+        videoElement.src = dataUrl;
+      });
+
+      // Set and start the pipeline
+      pipeline.setPipeline(pipelineString);
+      pipeline.start();
+
+      // Handle cleanup when the page is closed
+      window.addEventListener("beforeunload", () => {
+        pipeline.stop();
+      });
+    </script>
+  </body>
+</html>
