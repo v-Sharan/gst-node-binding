@@ -44,45 +44,44 @@ npm install
 npm run install
 ```
 
-## Usage with React and Webpack
+## Installation from GitHub
 
-### 1. Webpack Configuration
+### 1. Install from GitHub Repository
 
-Create or update your `webpack.config.js`:
+```bash
+# Navigate to your project directory
+cd your-project
+
+# Install directly from GitHub
+npm install github:your-username/gst-node-bindings
+
+# Or if you've forked the repository
+npm install github:your-fork-username/gst-node-bindings
+```
+
+### 2. Install Dependencies
+
+```bash
+# Install required dependencies
+npm install react react-dom
+
+# Install development dependencies
+npm install --save-dev webpack webpack-cli webpack-node-externals node-loader
+npm install --save-dev @babel/core @babel/preset-env @babel/preset-react babel-loader
+```
+
+### 3. Add to Your Project
+
+1. **Update your webpack.config.js**:
 
 ```javascript
-const path = require("path");
 const nodeExternals = require("webpack-node-externals");
 
 module.exports = {
-  target: "electron-renderer",
+  target: "electron-renderer", // or "node" if not using Electron
   externals: [nodeExternals()],
-  entry: "./src/index.js",
-  output: {
-    path: path.resolve(__dirname, "dist"),
-    filename: "bundle.js",
-    library: {
-      type: "commonjs2",
-    },
-  },
-  resolve: {
-    extensions: [".js", ".jsx", ".json"],
-    alias: {
-      "@": path.resolve(__dirname, "src"),
-    },
-  },
   module: {
     rules: [
-      {
-        test: /\.(js|jsx)$/,
-        exclude: /node_modules/,
-        use: {
-          loader: "babel-loader",
-          options: {
-            presets: ["@babel/preset-react", "@babel/preset-env"],
-          },
-        },
-      },
       {
         test: /\.node$/,
         use: "node-loader",
@@ -92,11 +91,10 @@ module.exports = {
 };
 ```
 
-### 2. React Component
-
-Create a VideoStream component:
+2. **Create a VideoStream component**:
 
 ```jsx
+// src/components/VideoStream.jsx
 import React, { useEffect, useRef } from "react";
 import GStreamerPipeline from "gst-node-bindings";
 
@@ -105,32 +103,27 @@ const VideoStream = ({ rtspUrl, width = 640, height = 480 }) => {
   const pipelineRef = useRef(null);
 
   useEffect(() => {
-    // Create pipeline instance
     const pipeline = new GStreamerPipeline();
     pipelineRef.current = pipeline;
 
-    // Set up RTSP pipeline
     const pipelineString = `rtspsrc location=${rtspUrl} latency=0 ! 
-            queue ! 
-            rtph264depay ! 
-            h264parse ! 
-            avdec_h264 ! 
-            videoconvert ! 
-            video/x-raw,format=RGB ! 
-            appsink name=sink emit-signals=true sync=false max-buffers=1 drop=true`;
+      queue ! 
+      rtph264depay ! 
+      h264parse ! 
+      avdec_h264 ! 
+      videoconvert ! 
+      video/x-raw,format=RGB ! 
+      appsink name=sink emit-signals=true sync=false max-buffers=1 drop=true`;
 
-    // Set up frame callback
     pipeline.onFrame((dataUrl) => {
       if (videoRef.current) {
         videoRef.current.src = dataUrl;
       }
     });
 
-    // Set and start the pipeline
     pipeline.setPipeline(pipelineString);
     pipeline.start();
 
-    // Cleanup on unmount
     return () => {
       if (pipelineRef.current) {
         pipelineRef.current.stop();
@@ -152,46 +145,79 @@ const VideoStream = ({ rtspUrl, width = 640, height = 480 }) => {
 export default VideoStream;
 ```
 
-### 3. Using the Component
+3. **Use in your existing component**:
 
 ```jsx
+// src/App.jsx or your existing component
 import React from "react";
 import VideoStream from "./components/VideoStream";
 
-function App() {
+function YourComponent() {
   return (
     <div>
-      <h1>RTSP Stream</h1>
+      <h1>Your Existing App</h1>
       <VideoStream rtspUrl="rtsp://your-camera-url" width={640} height={480} />
     </div>
   );
 }
-
-export default App;
 ```
 
-### 4. Electron Configuration
+### 4. Environment Setup
 
-In your Electron main process:
+1. **Install GStreamer**:
 
-```javascript
-const { app, BrowserWindow } = require("electron");
+   - Download from [gstreamer.freedesktop.org](https://gstreamer.freedesktop.org/download/)
+   - Install both Runtime and Development packages
+   - Add to system PATH:
 
-function createWindow() {
-  const win = new BrowserWindow({
-    width: 800,
-    height: 600,
-    webPreferences: {
-      nodeIntegration: true,
-      contextIsolation: false,
-    },
-  });
+     ```bash
+     # Windows
+     set PATH=%PATH%;D:\gstreamer\1.0\msvc_x86_64\bin
 
-  win.loadFile("index.html");
-}
+     # Linux/macOS
+     export PATH=$PATH:/usr/lib/gstreamer-1.0
+     ```
 
-app.whenReady().then(createWindow);
+2. **Build Tools**:
+   - Windows: Visual Studio 2022 with C++
+   - Linux: GCC and build-essential
+   - macOS: Xcode Command Line Tools
+
+### 5. Build and Run
+
+```bash
+# Build your project
+npm run build
+
+# Start your application
+npm start
 ```
+
+### Troubleshooting
+
+If you encounter issues:
+
+1. **Module not found**:
+
+   ```bash
+   Error: Cannot find module 'gst-node-bindings'
+   ```
+
+   Solution: Run `npm run install` in the gst-node-bindings directory
+
+2. **Build errors**:
+
+   ```bash
+   Error: Can't resolve 'gst-node-bindings'
+   ```
+
+   Solution: Check webpack config and ensure `.node` files are handled correctly
+
+3. **GStreamer errors**:
+   ```bash
+   Error: Cannot find module 'gst/gst.h'
+   ```
+   Solution: Verify GStreamer installation and PATH settings
 
 ## API Reference
 
