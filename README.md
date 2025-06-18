@@ -219,42 +219,247 @@ If you encounter issues:
    ```
    Solution: Verify GStreamer installation and PATH settings
 
+## Fixing node-loader Error
+
+If you encounter the error:
+
+```
+node-loader: TypeError: process.dlopen is not a function
+```
+
+This error occurs because native modules can't run directly in the browser. Here's how to fix it:
+
+### 1. Update Webpack Configuration
+
+```javascript
+// webpack.config.js
+const path = require("path");
+const nodeExternals = require("webpack-node-externals");
+
+module.exports = {
+  // Important: Set target to 'electron-renderer' or 'node'
+  target: "electron-renderer", // Use 'node' if not using Electron
+
+  // Exclude node modules from the bundle
+  externals: [nodeExternals()],
+
+  // Specify the entry point
+  entry: "./src/index.js",
+
+  output: {
+    path: path.resolve(__dirname, "dist"),
+    filename: "bundle.js",
+    library: {
+      type: "commonjs2",
+    },
+  },
+
+  resolve: {
+    extensions: [".js", ".jsx", ".json"],
+    // Add fallbacks for node modules
+    fallback: {
+      path: false,
+      fs: false,
+      crypto: false,
+    },
+  },
+
+  module: {
+    rules: [
+      {
+        test: /\.(js|jsx)$/,
+        exclude: /node_modules/,
+        use: {
+          loader: "babel-loader",
+          options: {
+            presets: ["@babel/preset-react", "@babel/preset-env"],
+          },
+        },
+      },
+      {
+        test: /\.node$/,
+        use: {
+          loader: "node-loader",
+          options: {
+            name: "[name].[ext]",
+          },
+        },
+      },
+    ],
+  },
+};
+```
+
+### 2. Electron Configuration
+
+If you're using Electron, update your main process:
+
+```javascript
+// main.js
+const { app, BrowserWindow } = require("electron");
+const path = require("path");
+
+function createWindow() {
+  const win = new BrowserWindow({
+    width: 800,
+    height: 600,
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false,
+      enableRemoteModule: true,
+    },
+  });
+
+  // Load your app
+  win.loadFile("index.html");
+}
+
+app.whenReady().then(createWindow);
+```
+
+### 3. Alternative Solution: Use a Server
+
+If you can't use Electron, create a server to handle the GStreamer pipeline:
+
+```javascript
+// server.js
+const express = require("express");
+const GStreamerPipeline = require("gst-node-bindings");
+const app = express();
+
+// Create pipeline instance
+const pipeline = new GStreamerPipeline();
+
+// Set up RTSP pipeline
+const pipelineString = `rtspsrc location=rtsp://your-camera-url latency=0 ! 
+  queue ! 
+  rtph264depay ! 
+  h264parse ! 
+  avdec_h264 ! 
+  videoconvert ! 
+  video/x-raw,format=RGB ! 
+  appsink name=sink emit-signals=true sync=false max-buffers=1 drop=true`;
+
+// Store latest frame
+let latestFrame = null;
+
+pipeline.onFrame((dataUrl) => {
+  latestFrame = dataUrl;
+});
+
+pipeline.setPipeline(pipelineString);
+pipeline.start();
+
+// Serve the latest frame
+app.get("/stream", (req, res) => {
+  if (latestFrame) {
+    res.send(latestFrame);
+  } else {
+    res.status(404).send("No frame available");
+  }
+});
+
+app.listen(3000, () => {
+  console.log("Server running on port 3000");
+});
+```
+
+Then in your React component:
+
+```jsx
+// VideoStream.jsx
+import React, { useEffect, useState } from "react";
+
+const VideoStream = ({ width = 640, height = 480 }) => {
+  const [frame, setFrame] = useState(null);
+
+  useEffect(() => {
+    const fetchFrame = async () => {
+      try {
+        const response = await fetch("http://localhost:3000/stream");
+        const data = await response.text();
+        setFrame(data);
+      } catch (error) {
+        console.error("Error fetching frame:", error);
+      }
+    };
+
+    const interval = setInterval(fetchFrame, 100);
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <div style={{ width, height, border: "1px solid #ccc" }}>
+      {frame && (
+        <img
+          src={frame}
+          style={{ width: "100%", height: "100%", objectFit: "contain" }}
+          alt="RTSP Stream"
+        />
+      )}
+    </div>
+  );
+};
+
+export default VideoStream;
+```
+
+### 4. Environment Variables
+
+Make sure these environment variables are set:
+
+```bash
+# Windows
+set NODE_ENV=development
+set ELECTRON_ENABLE_LOGGING=1
+
+# Linux/macOS
+export NODE_ENV=development
+export ELECTRON_ENABLE_LOGGING=1
+```
+
+### 5. Additional Troubleshooting
+
+If you still encounter issues:
+
+1. **Clear node_modules and rebuild**:
+
+```bash
+rm -rf node_modules
+npm cache clean --force
+npm install
+```
+
+2. **Check Node.js version**:
+
+```bash
+node -v  # Should be v14 or higher
+```
+
+3. **Verify GStreamer installation**:
+
+```bash
+# Windows
+where gst-launch-1.0
+
+# Linux/macOS
+which gst-launch-1.0
+```
+
+4. **Enable debug logging**:
+
+```bash
+# Windows
+set DEBUG=*
+
+# Linux/macOS
+export DEBUG=*
+```
+
 ## API Reference
 
 ### GStreamerPipeline
 
-```javascript
-const pipeline = new GStreamerPipeline();
 ```
 
-#### Methods
-
-- `setPipeline(pipelineString: string)`: Set the GStreamer pipeline
-- `start()`: Start the pipeline
-- `stop()`: Stop the pipeline
-- `onFrame(callback: (dataUrl: string) => void)`: Set callback for frame updates
-- `getCurrentFrame()`: Get the current frame as a data URL
-
-## Common Issues and Solutions
-
-1. **Missing GStreamer**
-
-   - Error: "Cannot find module 'gst/gst.h'"
-   - Solution: Ensure GStreamer is installed and PATH is set correctly
-
-2. **Build Errors**
-
-   - Error: "node-gyp rebuild failed"
-   - Solution: Install build tools and ensure they're in PATH
-
-3. **Runtime Errors**
-   - Error: "Cannot find module 'gst-node-bindings'"
-   - Solution: Rebuild the native module with `npm run install`
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## License
-
-MIT
+```
