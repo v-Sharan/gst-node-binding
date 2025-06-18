@@ -258,9 +258,12 @@ module.exports = {
     extensions: [".js", ".jsx", ".json"],
     // Add fallbacks for node modules
     fallback: {
-      path: false,
+      path: require.resolve("path-browserify"),
       fs: false,
-      crypto: false,
+      crypto: require.resolve("crypto-browserify"),
+      stream: require.resolve("stream-browserify"),
+      util: require.resolve("util"),
+      buffer: require.resolve("buffer/"),
     },
   },
 
@@ -307,6 +310,8 @@ function createWindow() {
       nodeIntegration: true,
       contextIsolation: false,
       enableRemoteModule: true,
+      // Important: Allow native modules
+      nativeWindowOpen: true,
     },
   });
 
@@ -317,82 +322,97 @@ function createWindow() {
 app.whenReady().then(createWindow);
 ```
 
-### 3. Alternative Solution: Use a Server
-
-If you can't use Electron, create a server to handle the GStreamer pipeline:
-
-```javascript
-// server.js
-const express = require("express");
-const GStreamerPipeline = require("gst-node-bindings");
-const app = express();
-
-// Create pipeline instance
-const pipeline = new GStreamerPipeline();
-
-// Set up RTSP pipeline
-const pipelineString = `rtspsrc location=rtsp://your-camera-url latency=0 ! 
-  queue ! 
-  rtph264depay ! 
-  h264parse ! 
-  avdec_h264 ! 
-  videoconvert ! 
-  video/x-raw,format=RGB ! 
-  appsink name=sink emit-signals=true sync=false max-buffers=1 drop=true`;
-
-// Store latest frame
-let latestFrame = null;
-
-pipeline.onFrame((dataUrl) => {
-  latestFrame = dataUrl;
-});
-
-pipeline.setPipeline(pipelineString);
-pipeline.start();
-
-// Serve the latest frame
-app.get("/stream", (req, res) => {
-  if (latestFrame) {
-    res.send(latestFrame);
-  } else {
-    res.status(404).send("No frame available");
-  }
-});
-
-app.listen(3000, () => {
-  console.log("Server running on port 3000");
-});
-```
-
-Then in your React component:
+### 3. Create Direct VideoStream Component
 
 ```jsx
-// VideoStream.jsx
-import React, { useEffect, useState } from "react";
+// src/components/VideoStream.jsx
+import React, { useEffect, useRef, useState } from "react";
+import GStreamerPipeline from "gst-node-bindings";
 
-const VideoStream = ({ width = 640, height = 480 }) => {
-  const [frame, setFrame] = useState(null);
+const VideoStream = ({ rtspUrl, width = 640, height = 480 }) => {
+  const videoRef = useRef(null);
+  const pipelineRef = useRef(null);
+  const [error, setError] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    const fetchFrame = async () => {
-      try {
-        const response = await fetch("http://localhost:3000/stream");
-        const data = await response.text();
-        setFrame(data);
-      } catch (error) {
-        console.error("Error fetching frame:", error);
+    try {
+      // Create pipeline instance
+      const pipeline = new GStreamerPipeline();
+      pipelineRef.current = pipeline;
+
+      // Set up RTSP pipeline with low latency
+      const pipelineString = `rtspsrc location=${rtspUrl} latency=0 ! 
+        queue max-size-buffers=1 ! 
+        rtph264depay ! 
+        h264parse ! 
+        avdec_h264 ! 
+        videoconvert ! 
+        video/x-raw,format=RGB ! 
+        appsink name=sink emit-signals=true sync=false max-buffers=1 drop=true`;
+
+      // Set up frame callback
+      pipeline.onFrame((dataUrl) => {
+        if (videoRef.current) {
+          videoRef.current.src = dataUrl;
+          setIsLoading(false);
+        }
+      });
+
+      // Set and start the pipeline
+      pipeline.setPipeline(pipelineString);
+      pipeline.start();
+    } catch (err) {
+      console.error("Error initializing pipeline:", err);
+      setError(err.message);
+    }
+
+    // Cleanup on unmount
+    return () => {
+      if (pipelineRef.current) {
+        try {
+          pipelineRef.current.stop();
+        } catch (err) {
+          console.error("Error stopping pipeline:", err);
+        }
       }
     };
+  }, [rtspUrl]);
 
-    const interval = setInterval(fetchFrame, 100);
-    return () => clearInterval(interval);
-  }, []);
+  if (error) {
+    return (
+      <div
+        style={{
+          width,
+          height,
+          border: "1px solid #ccc",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <p>Error: {error}</p>
+      </div>
+    );
+  }
 
   return (
     <div style={{ width, height, border: "1px solid #ccc" }}>
-      {frame && (
+      {isLoading ? (
+        <div
+          style={{
+            width: "100%",
+            height: "100%",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <p>Loading stream...</p>
+        </div>
+      ) : (
         <img
-          src={frame}
+          ref={videoRef}
           style={{ width: "100%", height: "100%", objectFit: "contain" }}
           alt="RTSP Stream"
         />
@@ -404,56 +424,378 @@ const VideoStream = ({ width = 640, height = 480 }) => {
 export default VideoStream;
 ```
 
-### 4. Environment Variables
+### 4. Use in Your App
 
-Make sure these environment variables are set:
+```jsx
+// src/App.jsx
+import React from "react";
+import VideoStream from "./components/VideoStream";
 
-```bash
-# Windows
-set NODE_ENV=development
-set ELECTRON_ENABLE_LOGGING=1
+function App() {
+  return (
+    <div>
+      <h1>RTSP Stream</h1>
+      <VideoStream rtspUrl="rtsp://your-camera-url" width={640} height={480} />
+    </div>
+  );
+}
 
-# Linux/macOS
-export NODE_ENV=development
-export ELECTRON_ENABLE_LOGGING=1
+export default App;
 ```
 
-### 5. Additional Troubleshooting
+### 5. Environment Setup
 
-If you still encounter issues:
-
-1. **Clear node_modules and rebuild**:
+1. **Install Dependencies**:
 
 ```bash
-rm -rf node_modules
-npm cache clean --force
-npm install
+npm install --save-dev electron electron-builder
 ```
 
-2. **Check Node.js version**:
+2. **Add Scripts to package.json**:
 
-```bash
-node -v  # Should be v14 or higher
+```json
+{
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder"
+  }
+}
 ```
 
-3. **Verify GStreamer installation**:
+### 6. Error Handling
 
-```bash
-# Windows
-where gst-launch-1.0
+Add error handling to the VideoStream component:
 
-# Linux/macOS
-which gst-launch-1.0
+```jsx
+// src/components/VideoStream.jsx
+const VideoStream = ({ rtspUrl, width = 640, height = 480 }) => {
+  const videoRef = useRef(null);
+  const pipelineRef = useRef(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    try {
+      const pipeline = new GStreamerPipeline();
+      pipelineRef.current = pipeline;
+
+      // ... rest of the setup code ...
+    } catch (err) {
+      console.error("Error initializing pipeline:", err);
+      setError(err.message);
+    }
+
+    return () => {
+      if (pipelineRef.current) {
+        try {
+          pipelineRef.current.stop();
+        } catch (err) {
+          console.error("Error stopping pipeline:", err);
+        }
+      }
+    };
+  }, [rtspUrl]);
+
+  if (error) {
+    return (
+      <div
+        style={{
+          width,
+          height,
+          border: "1px solid #ccc",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <p>Error: {error}</p>
+      </div>
+    );
+  }
+
+  // ... rest of the component ...
+};
 ```
 
-4. **Enable debug logging**:
+### 7. Performance Optimization
+
+1. **Adjust Frame Rate**:
+
+```jsx
+useEffect(() => {
+  const pipeline = new GStreamerPipeline();
+  pipelineRef.current = pipeline;
+
+  // Set lower latency for better performance
+  const pipelineString = `rtspsrc location=${rtspUrl} latency=0 ! 
+    queue max-size-buffers=1 ! 
+    rtph264depay ! 
+    h264parse ! 
+    avdec_h264 ! 
+    videoconvert ! 
+    video/x-raw,format=RGB ! 
+    appsink name=sink emit-signals=true sync=false max-buffers=1 drop=true`;
+
+  // ... rest of the code ...
+}, [rtspUrl]);
+```
+
+2. **Add Loading State**:
+
+```jsx
+const [isLoading, setIsLoading] = useState(true);
+
+useEffect(() => {
+  const pipeline = new GStreamerPipeline();
+  pipelineRef.current = pipeline;
+
+  pipeline.onFrame((dataUrl) => {
+    if (videoRef.current) {
+      videoRef.current.src = dataUrl;
+      setIsLoading(false);
+    }
+  });
+
+  // ... rest of the code ...
+}, [rtspUrl]);
+
+return (
+  <div style={{ width, height, border: "1px solid #ccc" }}>
+    {isLoading ? (
+      <div
+        style={{
+          width: "100%",
+          height: "100%",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <p>Loading stream...</p>
+      </div>
+    ) : (
+      <img
+        ref={videoRef}
+        style={{ width: "100%", height: "100%", objectFit: "contain" }}
+        alt="RTSP Stream"
+      />
+    )}
+  </div>
+);
+```
+
+### 8. Build and Run
 
 ```bash
-# Windows
-set DEBUG=*
+# Start the app
+npm start
 
-# Linux/macOS
-export DEBUG=*
+# Build for distribution
+npm run build
+```
+
+## Direct Usage with Electron
+
+To use GStreamer bindings directly in your Electron app without a server:
+
+### 1. Update Webpack Configuration
+
+```javascript
+// webpack.config.js
+const path = require("path");
+const webpack = require("webpack");
+
+module.exports = {
+  // Important: Must be electron-renderer for native modules
+  target: "electron-renderer",
+
+  // ... your existing config ...
+
+  resolve: {
+    // ... your existing resolve config ...
+    fallback: {
+      // ... your existing fallbacks ...
+      path: require.resolve("path-browserify"),
+      fs: false,
+      crypto: require.resolve("crypto-browserify"),
+      stream: require.resolve("stream-browserify"),
+      util: require.resolve("util"),
+      buffer: require.resolve("buffer/"),
+    },
+  },
+
+  module: {
+    rules: [
+      // ... your existing rules ...
+      {
+        test: /\.node$/,
+        use: {
+          loader: "node-loader",
+          options: {
+            name: "[name].[ext]",
+          },
+        },
+      },
+    ],
+  },
+};
+```
+
+### 2. Update Electron Main Process
+
+```javascript
+// main.js
+const { app, BrowserWindow } = require("electron");
+const path = require("path");
+
+function createWindow() {
+  const win = new BrowserWindow({
+    width: 800,
+    height: 600,
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false,
+      enableRemoteModule: true,
+      // Important: Allow native modules
+      nativeWindowOpen: true,
+    },
+  });
+
+  // Load your app
+  win.loadFile("index.html");
+}
+
+app.whenReady().then(createWindow);
+```
+
+### 3. Create Direct VideoStream Component
+
+```jsx
+// src/components/VideoStream.jsx
+import React, { useEffect, useRef, useState } from "react";
+import GStreamerPipeline from "gst-node-bindings";
+
+const VideoStream = ({ rtspUrl, width = 640, height = 480 }) => {
+  const videoRef = useRef(null);
+  const pipelineRef = useRef(null);
+  const [error, setError] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    try {
+      // Create pipeline instance
+      const pipeline = new GStreamerPipeline();
+      pipelineRef.current = pipeline;
+
+      // Set up RTSP pipeline with low latency
+      const pipelineString = `rtspsrc location=${rtspUrl} latency=0 ! 
+        queue max-size-buffers=1 ! 
+        rtph264depay ! 
+        h264parse ! 
+        avdec_h264 ! 
+        videoconvert ! 
+        video/x-raw,format=RGB ! 
+        appsink name=sink emit-signals=true sync=false max-buffers=1 drop=true`;
+
+      // Set up frame callback
+      pipeline.onFrame((dataUrl) => {
+        if (videoRef.current) {
+          videoRef.current.src = dataUrl;
+          setIsLoading(false);
+        }
+      });
+
+      // Set and start the pipeline
+      pipeline.setPipeline(pipelineString);
+      pipeline.start();
+    } catch (err) {
+      console.error("Error initializing pipeline:", err);
+      setError(err.message);
+    }
+
+    // Cleanup on unmount
+    return () => {
+      if (pipelineRef.current) {
+        try {
+          pipelineRef.current.stop();
+        } catch (err) {
+          console.error("Error stopping pipeline:", err);
+        }
+      }
+    };
+  }, [rtspUrl]);
+
+  if (error) {
+    return (
+      <div
+        style={{
+          width,
+          height,
+          border: "1px solid #ccc",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <p>Error: {error}</p>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ width, height, border: "1px solid #ccc" }}>
+      {isLoading ? (
+        <div
+          style={{
+            width: "100%",
+            height: "100%",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <p>Loading stream...</p>
+        </div>
+      ) : (
+        <img
+          ref={videoRef}
+          style={{ width: "100%", height: "100%", objectFit: "contain" }}
+          alt="RTSP Stream"
+        />
+      )}
+    </div>
+  );
+};
+
+export default VideoStream;
+```
+
+### 4. Use in Your App
+
+```jsx
+// src/App.jsx
+import React from "react";
+import VideoStream from "./components/VideoStream";
+
+function App() {
+  return (
+    <div>
+      <h1>RTSP Stream</h1>
+      <VideoStream rtspUrl="rtsp://your-camera-url" width={640} height={480} />
+    </div>
+  );
+}
+
+export default App;
+```
+
+### 5. Build and Run
+
+```bash
+# Start the app
+npm start
+
+# Build for distribution
+npm run build
 ```
 
 ## API Reference
